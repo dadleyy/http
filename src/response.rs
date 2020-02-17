@@ -488,6 +488,31 @@ impl<T: Default> Default for Response<T> {
     }
 }
 
+impl<T: fmt::Display> fmt::Display for Response<T> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (version, status) = (self.version(), self.status());
+        let status_line = format!("{:?} {}", version, status,);
+
+        let body = format!("{}", self.body);
+        let headers = self.headers();
+
+        if headers.is_empty() {
+            return write!(formatter, "{}\r\n\r\n{}", status_line, body);
+        }
+
+        let combined = headers
+            .iter()
+            .map(|(name, value)| {
+                let bytes: &[u8] = value.as_bytes();
+                std::str::from_utf8(bytes).map(|valid| format!("{}: {}\r\n", name, valid))
+            })
+            .flatten()
+            .collect::<String>();
+
+        write!(formatter, "{}\r\n{}\r\n{}", status_line, combined, body)
+    }
+}
+
 impl<T: fmt::Debug> fmt::Debug for Response<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Response")
@@ -719,19 +744,14 @@ impl Builder {
     ///     .unwrap();
     /// ```
     pub fn body<T>(self, body: T) -> Result<Response<T>> {
-        self.inner.map(move |head| {
-            Response {
-                head,
-                body,
-            }
-        })
+        self.inner.map(move |head| Response { head, body })
     }
 
     // private
 
     fn and_then<F>(self, func: F) -> Self
     where
-        F: FnOnce(Parts) -> Result<Parts>
+        F: FnOnce(Parts) -> Result<Parts>,
     {
         Builder {
             inner: self.inner.and_then(func),
@@ -760,5 +780,24 @@ mod tests {
             123u32
         });
         assert_eq!(mapped_response.body(), &123u32);
+    }
+
+    #[test]
+    fn it_formats_correctly_with_headers() {
+        let response = Response::builder()
+            .header("Content-Length", "4")
+            .header("Host", "docs.rs")
+            .body("body")
+            .unwrap();
+        assert_eq!(
+            format!("{}", response),
+            "HTTP/1.1 200 OK\r\ncontent-length: 4\r\nhost: docs.rs\r\n\r\nbody"
+        );
+    }
+
+    #[test]
+    fn it_formats_correctly_without_headers() {
+        let response = Response::builder().body("body").unwrap();
+        assert_eq!(format!("{}", response), "HTTP/1.1 200 OK\r\n\r\nbody");
     }
 }
